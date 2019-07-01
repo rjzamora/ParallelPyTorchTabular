@@ -17,7 +17,7 @@ class BatchDataLoader(object):
     """
 
     def __init__(
-        self, batchdataset, shuffle=False, pin_memory=False, drop_last=False
+        self, batchdataset, shuffle=False, pin_memory=False, drop_last=False, mysize=1, myrank=0
     ):
         self.batchdataset = batchdataset
         self.batch_size = batchdataset.batch_size
@@ -25,6 +25,9 @@ class BatchDataLoader(object):
         self.shuffle = shuffle
         self.pin_memory = pin_memory
         self.drop_last = drop_last
+
+        self.mysize = mysize
+        self.myrank = myrank
 
     def __iter__(self):
         return _BatchDataLoaderIter(self)
@@ -52,6 +55,11 @@ class _BatchDataLoaderIter(object):
             self.batchdataset.shuffle()
 
         self.idx = 0
+
+        # Adjust index offset for parallel learning
+        if loader.mysize > 0:
+            self.idx = loader.myrank * int(len(self) / loader.mysize)
+
 
     def __len__(self):
         if (

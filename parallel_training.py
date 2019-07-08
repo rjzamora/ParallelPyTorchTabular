@@ -1,73 +1,121 @@
-import argparse
-import datetime as dt
-import glob, os, re, subprocess, tempfile
+import os
 from tqdm import tqdm
 import time
 import math
+from collections import defaultdict
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.optim as torch_optim
 from torch.utils import data as torch_data
-import torch.multiprocessing as mp
 
 from dataset_from_parquet import dataset_from_parquet
 from batch_dataset_from_parquet import batch_dataset_from_parquet
 import batch_dataset, batch_dataloader
-from model import MortgageNetwork
 
 import horovod.torch as hvd
 
 
-# ========================================================================== #
-#                                                                            #
-#  Input/Options                                                             #
-#                                                                            #
-# ========================================================================== #
+class SharedAdam(torch_optim.Optimizer):
+    """Implements Adam algorithm with shared states.
+    BAsed on:
+    https://github.com/dgriff777/rl_a3c_pytorch/
+    """
 
-parser = argparse.ArgumentParser(description="Parallel Mortgage Workflow")
-parser.add_argument("--batch-size", type=int, default=80960, help="input batch size for training (default: 80960)")
-parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train (default: 1)")
-parser.add_argument("--base-lr", type=float, default=0.01, help="learning rate for a single GPU")
-parser.add_argument("--warmup-epochs", type=float, default=5, help="number of warmup epochs")
-parser.add_argument("--momentum", type=float, default=0.9, help="SGD momentum")
-parser.add_argument("--wd", type=float, default=0.00005, help="weight decay")
-parser.add_argument("--batched", action="store_true", default=False, help="Use batched dataloader.")
-parser.add_argument("--hvd", action="store_true", default=False, help="Use horovod for data parallelism.")
-parser.add_argument("--hogwild", type=int, default=0, help="Use hogwild with this many processes.")
-parser.add_argument("--adam", action="store_true", default=False, help="Use adam optimizer instead of SGD.")
-parser.add_argument("--no-cuda", action="store_true", default=False, help="disables CUDA training")
-parser.add_argument("--seed", type=int, default=42, help="random seed")
-parser.add_argument("--fp16-allreduce", action="store_true", default=False, help="use fp16 during hvd allreduce")
-parser.add_argument("--batches-per-allreduce", type=int, default=1,
-    help="In hrovod, number of batches processed locally "
-    "before executing allreduce across workers; it multiplies "
-    "total batch size.",
-)
-parser.add_argument("--data-dir", default="/datasets/mortgage/post_etl/dnn/", help="Dataset location")
-# Note: In Docker, use "--data-dir /data/mortgage/"
-args = parser.parse_args()
-args.cuda = not args.no_cuda and torch.cuda.is_available()
-allreduce_batch_size = args.batch_size * args.batches_per_allreduce
+    def __init__(self,
+                 params,
+                 lr=1e-3,
+                 betas=(0.9, 0.999),
+                 eps=1e-3,
+                 weight_decay=0,
+                 amsgrad=False):
+        defaults = defaultdict(
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            amsgrad=amsgrad)
+        super(SharedAdam, self).__init__(params, defaults)
 
-# Hogwild gets preference over horovod, for now.
-# Can try to combine methodologies in the future (or detect which is better)
-if args.hvd and args.hogwild > 0:
-    args.hvd = False
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['step'] = torch.zeros(1)
+                state['exp_avg'] = p.data.new().resize_as_(p.data).zero_()
+                state['exp_avg_sq'] = p.data.new().resize_as_(p.data).zero_()
+                state['max_exp_avg_sq'] = p.data.new().resize_as_(
+                    p.data).zero_()
 
-# Hard-coded options
-num_features = 2 ** 22  # When hashing features range will be [0, num_features)
-embedding_size = 64
-num_samples = 8096000
-hidden_dims = [600, 600, 600, 600]
+    def share_memory(self):
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['step'].share_memory_()
+                state['exp_avg'].share_memory_()
+                state['exp_avg_sq'].share_memory_()
+                state['max_exp_avg_sq'].share_memory_()
 
+    def step(self, closure=None):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                if grad.is_sparse:
+                    raise RuntimeError(
+                        'Adam does not support sparse gradients, please consider SparseAdam instead'
+                    )
+                amsgrad = group['amsgrad']
+
+                state = self.state[p]
+
+                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                if amsgrad:
+                    max_exp_avg_sq = state['max_exp_avg_sq']
+                beta1, beta2 = group['betas']
+
+                state['step'] += 1
+
+                if group['weight_decay'] != 0:
+                    grad = grad.add(group['weight_decay'], p.data)
+
+                # Decay the first and second moment running average coefficient
+                exp_avg.mul_(beta1).add_(1 - beta1, grad)
+                exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
+
+                if amsgrad:
+                    # Maintains the maximum of all 2nd moment running avg. till
+                    # now
+                    torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
+                    # Use the max. for normalizing running avg. of gradient
+                    denom = max_exp_avg_sq.sqrt().add_(group['eps'])
+                else:
+                    denom = exp_avg_sq.sqrt().add_(group['eps'])
+
+                bias_correction1 = 1 - beta1**state['step'].item()
+                bias_correction2 = 1 - beta2**state['step'].item()
+                step_size = group['lr'] * \
+                    math.sqrt(bias_correction2) / bias_correction1
+
+                p.data.addcdiv_(-step_size, exp_avg, denom)
+
+        return loss
 
 # Horovod: using `lr = base_lr * hvd.size()` from the very beginning leads to worse final
 # accuracy. Scale the learning rate `lr = base_lr` ---> `lr = base_lr * hvd.size()` during
 # the first five epochs. See https://arxiv.org/abs/1706.02677 for details.
 # After the warmup reduce learning rate by 10 on the 30th, 60th and 80th epochs.
-def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size):
+def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
     if epoch < args.warmup_epochs:
         epoch += float(batch_idx + 1) / loader_size
         lr_adj = (
@@ -91,13 +139,14 @@ def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size):
 
 # Average metrics from distributed (horovod) training.
 class Metric(object):
-    def __init__(self, name):
+    def __init__(self, name, use_hvd):
         self.name = name
         self.sum = torch.tensor(0.0)
         self.n = torch.tensor(0.0)
+        self.use_hvd = use_hvd
 
     def update(self, val):
-        if args.hvd:
+        if self.use_hvd:
             self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
         else:
             self.sum += val.detach().cpu()
@@ -114,25 +163,27 @@ class Metric(object):
 #                                                                            #
 # ========================================================================== #
 
-def train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, verbose):
+def train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args):
     model.train()
     if not args.batched:
         train_sampler.set_epoch(epoch)
-    train_loss = Metric("train_loss")
-    num_iterations = int(len(train_loader) // max(1, mysize))
+    train_loss = Metric("train_loss", args.hvd)
+    num_iterations = int(len(train_loader) // max(1, args.mysize))
     with tqdm(
         total=num_iterations,
         desc="Train Epoch     #{}".format(epoch + 1),
-        disable=not verbose,
+        disable=not args.verbose,
     ) as t:
         for batch_idx, (data, target) in enumerate(train_loader):
             if batch_idx == num_iterations:
                 break
-            if not args.adam:
-                adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader))
+            if args.hvd and not args.adam:
+                adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
             if args.cuda:
-                data = data.to("cuda")
-                target = target.to("cuda")
+                data = data.to("cuda:"+str(args.myrank))
+                target = target.to("cuda:"+str(args.myrank))
+                #data = data.to("cuda")
+                #target = target.to("cuda")
             optimizer.zero_grad()
 
             # Split data into sub-batches of size batch_size
@@ -152,13 +203,14 @@ def train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, v
             t.update(1)
 
 
-def train(model, myrank, mysize):
+def train(myrank, mysize, model, optimizer, args):
 
     # ====================================================================== #
     #  Data Handling                                                         #
     # ====================================================================== #
 
     out_dir = args.data_dir
+    allreduce_batch_size = args.batch_size * args.batches_per_allreduce
     kwargs = {"num_workers": 8, "pin_memory": True} if args.cuda else {}
     if args.batched:
         train_dataset = batch_dataset_from_parquet(
@@ -175,7 +227,7 @@ def train(model, myrank, mysize):
     else:
         train_dataset = dataset_from_parquet(
             os.path.join(out_dir, "train"),
-            num_samples=num_samples,
+            num_samples=args.num_samples,
             shuffle_files=False,
         )
         train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -191,19 +243,6 @@ def train(model, myrank, mysize):
     # ====================================================================== #
     #  Define Loss/Optimization                                              #
     # ====================================================================== #
-
-    # Using Adam optimizer?
-    if args.adam:
-        optimizer = torch_optim.Adam(model.parameters(), lr=args.base_lr)
-    else:
-        # Horovod: scale learning rate by the number of GPUs.
-        # Gradient Accumulation: scale learning rate by batches_per_allreduce
-        optimizer = torch_optim.SGD(
-            model.parameters(),
-            lr=(args.base_lr * args.batches_per_allreduce * mysize),
-            momentum=args.momentum,
-            weight_decay=args.wd,
-        )
 
     if args.hvd:
         # Horovod: (optional) compression algorithm.
@@ -230,14 +269,15 @@ def train(model, myrank, mysize):
     #  Main Training Loop                                                    #
     # ====================================================================== #
 
-    verbose = 1 if myrank == 0 else 0
+    args.verbose = 1 if myrank == 0 else 0
+    args.mysize = mysize
+    args.myrank = myrank
     start_time = time.time()
     for epoch in range(args.epochs):
-        train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, verbose)
+        train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args)
 
-    # Print final performance summary
-    # For hogwild, other ranks may still be working...
-    if verbose:
+    # Print final performance summar,.    # For hogwild, other ranks may still be working...
+    if args.verbose:
         if args.batched:
             num_iterations = len(train_loader)
         else:
@@ -250,55 +290,3 @@ def train(model, myrank, mysize):
                 args.epochs, total_time, ex_per_epoch, total_examples / total_time
             )
         )
-
-
-# ========================================================================== #
-#  Main "Method"                                                             #
-# ========================================================================== #
-if __name__ == '__main__':
-
-    # Initialize Horovod/Cuda
-    myrank = 0
-    mysize = 1
-    if args.hvd:
-        hvd.init()
-        myrank = hvd.rank()
-        mysize = hvd.size()
-    torch.manual_seed(args.seed)
-    if args.cuda:
-        # Horovod: pin GPU to local rank.
-        if args.hvd:
-            torch.cuda.set_device(hvd.local_rank())
-        torch.cuda.manual_seed(args.seed)
-
-    # Model definition
-    model = MortgageNetwork(
-        num_features,
-        embedding_size,
-        hidden_dims,
-        activation=nn.ReLU(),
-        use_cuda=args.cuda,
-    )
-
-    if args.hogwild > 0:
-        if args.cuda:
-            model = model.to("cuda")
-        model.share_memory() # gradients are allocated lazily, so they are not shared here
-
-    processes = []
-    start_time = time.time()
-    if args.hogwild > 0:
-        for rank in range(args.hogwild):
-            myrank = rank
-            mysize = args.hogwild
-            p = mp.Process(target=train, args=(myrank, mysize, model))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
-    else:
-        train(myrank, mysize, model)
-    end_time = time.time()
-
-    if myrank==0:
-        print("Total Training Time: "+str(end_time - start_time)+" seconds")

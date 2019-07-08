@@ -14,7 +14,16 @@ from dataset_from_parquet import dataset_from_parquet
 from batch_dataset_from_parquet import batch_dataset_from_parquet
 import batch_dataset, batch_dataloader
 
+from model import MortgageNetwork
 import horovod.torch as hvd
+
+
+def ensure_shared_grads(model, shared_model, gpu=False):
+    for param, shared_param in zip(
+        model.parameters(),
+        shared_model.parameters()
+    ):
+        shared_param._grad = param.grad.cpu()
 
 
 class SharedAdam(torch_optim.Optimizer):
@@ -209,6 +218,11 @@ def train(myrank, mysize, model, optimizer, args):
     #  Data Handling                                                         #
     # ====================================================================== #
 
+    gpu_id = args.gpu_ids[myrank % len(args.gpu_ids)]
+    torch.manual_seed(args.seed + myrank)
+    if gpu_id >= 0:
+        torch.cuda.manual_seed(args.seed + myrank)
+
     out_dir = args.data_dir
     allreduce_batch_size = args.batch_size * args.batches_per_allreduce
     kwargs = {"num_workers": 8, "pin_memory": True} if args.cuda else {}
@@ -265,6 +279,15 @@ def train(myrank, mysize, model, optimizer, args):
     # Loss Function
     loss_fn = lambda pred, target: F.binary_cross_entropy_with_logits(pred, target)
 
+    # Local model definition
+    local_model = MortgageNetwork(
+        args.num_features,
+        args.embedding_size,
+        args.hidden_dims,
+        activation=nn.ReLU(),
+        use_cuda=args.cuda,
+    )
+
     # ====================================================================== #
     #  Main Training Loop                                                    #
     # ====================================================================== #
@@ -273,8 +296,64 @@ def train(myrank, mysize, model, optimizer, args):
     args.mysize = mysize
     args.myrank = myrank
     start_time = time.time()
-    for epoch in range(args.epochs):
-        train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args)
+
+    if gpu_id >= 0:
+        for epoch in range(args.epochs):
+            local_model = local_model.cuda()
+            local_model.train()
+            #train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args)
+
+
+
+            if not args.batched:
+                train_sampler.set_epoch(epoch)
+            train_loss = Metric("train_loss", args.hvd)
+            num_iterations = int(len(train_loader) // max(1, args.mysize))
+            with tqdm(
+                total=num_iterations,
+                desc="Train Epoch     #{}".format(epoch + 1),
+                disable=not args.verbose,
+            ) as t:
+                for batch_idx, (data, target) in enumerate(train_loader):
+                    if batch_idx == num_iterations:
+                        break
+                    if args.hvd and not args.adam:
+                        adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
+                    #if args.cuda:
+                    #    data = data.to("cuda:"+str(args.myrank))
+                    #    target = target.to("cuda:"+str(args.myrank))
+                    #    #data = data.to("cuda")
+                    #    #target = target.to("cuda")
+                    #optimizer.zero_grad()
+                    local_model.zero_grad()
+                    local_model.load_state_dict(model.state_dict())
+                    output = local_model(data.cuda())
+                    loss = loss_fn(output, target.cuda())
+                    loss.backward()
+                    ensure_shared_grads(local_model, model, gpu=gpu_id >= 0)
+                    #if batch_idx % args.log_interval == 0:
+                    #    print('{}\tTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                    #        pid, epoch, batch_idx * len(data), len(train_data_loader.dataset),
+                    #        100. * batch_idx / len(train_data_loader), loss.item()))
+                    optimizer.step()
+
+
+                    ## Split data into sub-batches of size batch_size
+                    #for i in range(0, len(data), args.batch_size):
+                    #    data_batch = data[i : i + args.batch_size]
+                    #    target_batch = target[i : i + args.batch_size]
+                    #    output = model(data_batch)
+                    #    loss = loss_fn(output, target_batch)
+                    #    train_loss.update(loss)
+                    #    # Average gradients among sub-batches
+                    #    loss.div_(math.ceil(float(len(data)) / args.batch_size))
+                    #    loss.backward()
+
+                    # Gradient is applied across all ranks
+                    optimizer.step()
+                    t.set_postfix({"loss": train_loss.avg.item()})
+                    t.update(1)
+
 
     # Print final performance summar,.    # For hogwild, other ranks may still be working...
     if args.verbose:

@@ -30,6 +30,12 @@ parser.add_argument("--data-dir", default="/datasets/mortgage/post_etl/dnn/", he
 # Note: In Docker, use "--data-dir /data/mortgage/"
 args = parser.parse_args()
 
+# Hard-coded options
+args.num_features = 2 ** 22  # When hashing features range will be [0, args.num_features)
+args.embedding_size = 64
+args.hidden_dims = [600, 600, 600, 600]
+args.num_samples = 8096000
+args.gpu_ids = [0,1,2,3]
 
 # ========================================================================== #
 #  Main "Method"                                                             #
@@ -57,17 +63,7 @@ if __name__ == '__main__':
     from parallel_training import train, SharedAdam
 
 
-    # Hard-coded options
-    num_features = 2 ** 22  # When hashing features range will be [0, num_features)
-    embedding_size = 64
-    hidden_dims = [600, 600, 600, 600]
-    args.num_samples = 8096000
-
     args.cuda = not args.no_cuda and torch.cuda.is_available()
-    if args.cuda:
-        device = "cuda"
-    else:
-        device = "cpu"
 
     # Initialize Horovod/Cuda
     myrank = 0
@@ -85,12 +81,15 @@ if __name__ == '__main__':
 
     # Model definition
     model = MortgageNetwork(
-        num_features,
-        embedding_size,
-        hidden_dims,
+        args.num_features,
+        args.embedding_size,
+        args.hidden_dims,
         activation=nn.ReLU(),
         use_cuda=args.cuda,
     )
+
+    if args.hogwild > 0:
+        model.share_memory() # gradients are allocated lazily, so they are not shared here
 
     # Using Adam optimizer?
     if args.adam:
@@ -108,10 +107,6 @@ if __name__ == '__main__':
             momentum=args.momentum,
             weight_decay=args.wd,
         )
-
-    if args.hogwild > 0:
-        model = model.to(device)
-        model.share_memory() # gradients are allocated lazily, so they are not shared here
 
     processes = []
     start_time = time.time()

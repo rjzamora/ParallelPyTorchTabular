@@ -77,7 +77,7 @@ if __name__ == '__main__':
         import horovod.torch as hvd
 
     from model import MortgageNetwork
-    from parallel_training import train
+    from training import train
     from shared_optimizer import SharedAdam
 
 

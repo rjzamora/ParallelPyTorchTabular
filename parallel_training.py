@@ -18,107 +18,20 @@ from model import MortgageNetwork
 import horovod.torch as hvd
 
 
-def ensure_shared_grads(model, shared_model, gpu=False):
+def ensure_shared_grads(model, shared_model, cpu=False):
     for param, shared_param in zip(
         model.parameters(),
         shared_model.parameters()
     ):
-        shared_param._grad = param.grad.cpu()
+        try:
+            if cpu:
+                shared_param._grad = param.grad.cpu()
+            else:
+                shared_param._grad = param.grad
+        except:
+            print('Failed to copy local to shared gradients.')
+            raise(RuntimeError)
 
-
-class SharedAdam(torch_optim.Optimizer):
-    """Implements Adam algorithm with shared states.
-    BAsed on:
-    https://github.com/dgriff777/rl_a3c_pytorch/
-    """
-
-    def __init__(self,
-                 params,
-                 lr=1e-3,
-                 betas=(0.9, 0.999),
-                 eps=1e-3,
-                 weight_decay=0,
-                 amsgrad=False):
-        defaults = defaultdict(
-            lr=lr,
-            betas=betas,
-            eps=eps,
-            weight_decay=weight_decay,
-            amsgrad=amsgrad)
-        super(SharedAdam, self).__init__(params, defaults)
-
-        for group in self.param_groups:
-            for p in group['params']:
-                state = self.state[p]
-                state['step'] = torch.zeros(1)
-                state['exp_avg'] = p.data.new().resize_as_(p.data).zero_()
-                state['exp_avg_sq'] = p.data.new().resize_as_(p.data).zero_()
-                state['max_exp_avg_sq'] = p.data.new().resize_as_(
-                    p.data).zero_()
-
-    def share_memory(self):
-        for group in self.param_groups:
-            for p in group['params']:
-                state = self.state[p]
-                state['step'].share_memory_()
-                state['exp_avg'].share_memory_()
-                state['exp_avg_sq'].share_memory_()
-                state['max_exp_avg_sq'].share_memory_()
-
-    def step(self, closure=None):
-        """Performs a single optimization step.
-        Arguments:
-            closure (callable, optional): A closure that reevaluates the model
-                and returns the loss.
-        """
-        loss = None
-        if closure is not None:
-            loss = closure()
-
-        for group in self.param_groups:
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                grad = p.grad.data
-                if grad.is_sparse:
-                    raise RuntimeError(
-                        'Adam does not support sparse gradients, please consider SparseAdam instead'
-                    )
-                amsgrad = group['amsgrad']
-
-                state = self.state[p]
-
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-                if amsgrad:
-                    max_exp_avg_sq = state['max_exp_avg_sq']
-                beta1, beta2 = group['betas']
-
-                state['step'] += 1
-
-                if group['weight_decay'] != 0:
-                    grad = grad.add(group['weight_decay'], p.data)
-
-                # Decay the first and second moment running average coefficient
-                exp_avg.mul_(beta1).add_(1 - beta1, grad)
-                exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
-
-                if amsgrad:
-                    # Maintains the maximum of all 2nd moment running avg. till
-                    # now
-                    torch.max(max_exp_avg_sq, exp_avg_sq, out=max_exp_avg_sq)
-                    # Use the max. for normalizing running avg. of gradient
-                    denom = max_exp_avg_sq.sqrt().add_(group['eps'])
-                else:
-                    denom = exp_avg_sq.sqrt().add_(group['eps'])
-
-                bias_correction1 = 1 - beta1**state['step'].item()
-                bias_correction2 = 1 - beta2**state['step'].item()
-                step_size = group['lr'] * \
-                    math.sqrt(bias_correction2) / bias_correction1
-
-                p.data.addcdiv_(-step_size, exp_avg, denom)
-
-        return loss
 
 # Horovod: using `lr = base_lr * hvd.size()` from the very beginning leads to worse final
 # accuracy. Scale the learning rate `lr = base_lr` ---> `lr = base_lr * hvd.size()` during
@@ -168,12 +81,22 @@ class Metric(object):
 
 # ========================================================================== #
 #                                                                            #
-#  Training Function Definitions                                             #
+#  Training Function Definition                                              #
 #                                                                            #
 # ========================================================================== #
 
-def train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args):
-    model.train()
+def train_epoch(
+    model,
+    local_model,
+    loss_fn,
+    optimizer,
+    train_loader,
+    train_sampler,
+    epoch,
+    args,
+):
+    if not args.hogwild:
+        model.train()
     if not args.batched:
         train_sampler.set_epoch(epoch)
     train_loss = Metric("train_loss", args.hvd)
@@ -188,23 +111,37 @@ def train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, a
                 break
             if args.hvd and not args.adam:
                 adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
-            if args.cuda:
-                data = data.to("cuda:"+str(args.myrank))
-                target = target.to("cuda:"+str(args.myrank))
-                #data = data.to("cuda")
-                #target = target.to("cuda")
-            optimizer.zero_grad()
 
-            # Split data into sub-batches of size batch_size
-            for i in range(0, len(data), args.batch_size):
-                data_batch = data[i : i + args.batch_size]
-                target_batch = target[i : i + args.batch_size]
-                output = model(data_batch)
-                loss = loss_fn(output, target_batch)
-                train_loss.update(loss)
-                # Average gradients among sub-batches
-                loss.div_(math.ceil(float(len(data)) / args.batch_size))
-                loss.backward()
+            if args.hogwild:
+                if args.hogwild_gpus > 1:
+                    local_model.zero_grad()
+                    local_model.load_state_dict(model.state_dict())
+                    output = local_model(data.cuda())
+                    loss = loss_fn(output, target.cuda())
+                    train_loss.update(loss)
+                    loss.backward()
+                    ensure_shared_grads(local_model, model, cpu=args.cpu_params)
+                else:
+                    optimizer.zero_grad()
+                    output = model(data.cuda())
+                    loss = loss_fn(output, target.cuda())
+                    train_loss.update(loss)
+                    loss.backward()
+            else:
+                if args.cuda:
+                    data = data.cuda()
+                    target = target.cuda()
+                optimizer.zero_grad()
+                # Split data into sub-batches of size batch_size
+                for i in range(0, len(data), args.batch_size):
+                    data_batch = data[i : i + args.batch_size]
+                    target_batch = target[i : i + args.batch_size]
+                    output = model(data_batch)
+                    loss = loss_fn(output, target_batch)
+                    train_loss.update(loss)
+                    # Average gradients among sub-batches
+                    loss.div_(math.ceil(float(len(data)) / args.batch_size))
+                    loss.backward()
 
             # Gradient is applied across all ranks
             optimizer.step()
@@ -218,10 +155,18 @@ def train(myrank, mysize, model, optimizer, args):
     #  Data Handling                                                         #
     # ====================================================================== #
 
-    gpu_id = args.gpu_ids[myrank % len(args.gpu_ids)]
-    torch.manual_seed(args.seed + myrank)
-    if gpu_id >= 0:
-        torch.cuda.manual_seed(args.seed + myrank)
+    distributed_hw = False
+    if args.hogwild:
+        if args.hogwild_gpus > 1:
+            distributed_hw = True
+            gpu_id = args.gpu_ids[myrank % len(args.gpu_ids)]
+        else:
+            gpu_id = args.gpu_ids[0]
+        torch.manual_seed(args.seed + myrank)
+        if gpu_id >= 0:
+            torch.cuda.manual_seed(args.seed + myrank)
+    else:
+        gpu_id = -1
 
     out_dir = args.data_dir
     allreduce_batch_size = args.batch_size * args.batches_per_allreduce
@@ -255,7 +200,7 @@ def train(myrank, mysize, model, optimizer, args):
         )
 
     # ====================================================================== #
-    #  Define Loss/Optimization                                              #
+    #  Define Loss/Optimization/LocalModel                                   #
     # ====================================================================== #
 
     if args.hvd:
@@ -279,14 +224,16 @@ def train(myrank, mysize, model, optimizer, args):
     # Loss Function
     loss_fn = lambda pred, target: F.binary_cross_entropy_with_logits(pred, target)
 
-    # Local model definition
-    local_model = MortgageNetwork(
-        args.num_features,
-        args.embedding_size,
-        args.hidden_dims,
-        activation=nn.ReLU(),
-        use_cuda=args.cuda,
-    )
+    local_model = None
+    if distributed_hw:
+        # Local model definition
+        local_model = MortgageNetwork(
+            args.num_features,
+            args.embedding_size,
+            args.hidden_dims,
+            activation=nn.ReLU(),
+            use_cuda=args.cuda,
+        )
 
     # ====================================================================== #
     #  Main Training Loop                                                    #
@@ -296,66 +243,39 @@ def train(myrank, mysize, model, optimizer, args):
     args.mysize = mysize
     args.myrank = myrank
     start_time = time.time()
-
     if gpu_id >= 0:
+        # Hogwild Training
+        with torch.cuda.device(gpu_id):
+            if distributed_hw:
+                local_model = local_model.cuda()
+                local_model.train()
+            for epoch in range(args.epochs):
+                train_epoch(
+                    model,
+                    local_model,
+                    loss_fn,
+                    optimizer,
+                    train_loader,
+                    train_sampler,
+                    epoch,
+                    args,
+                )
+    else:
+        # Horovod & Serial
         for epoch in range(args.epochs):
-            local_model = local_model.cuda()
-            local_model.train()
-            #train_epoch(model, loss_fn, optimizer, train_loader, train_sampler, epoch, args)
+            train_epoch(
+                model,
+                local_model,
+                loss_fn,
+                optimizer,
+                train_loader,
+                train_sampler,
+                epoch,
+                args,
+            )
 
-
-
-            if not args.batched:
-                train_sampler.set_epoch(epoch)
-            train_loss = Metric("train_loss", args.hvd)
-            num_iterations = int(len(train_loader) // max(1, args.mysize))
-            with tqdm(
-                total=num_iterations,
-                desc="Train Epoch     #{}".format(epoch + 1),
-                disable=not args.verbose,
-            ) as t:
-                for batch_idx, (data, target) in enumerate(train_loader):
-                    if batch_idx == num_iterations:
-                        break
-                    if args.hvd and not args.adam:
-                        adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
-                    #if args.cuda:
-                    #    data = data.to("cuda:"+str(args.myrank))
-                    #    target = target.to("cuda:"+str(args.myrank))
-                    #    #data = data.to("cuda")
-                    #    #target = target.to("cuda")
-                    #optimizer.zero_grad()
-                    local_model.zero_grad()
-                    local_model.load_state_dict(model.state_dict())
-                    output = local_model(data.cuda())
-                    loss = loss_fn(output, target.cuda())
-                    loss.backward()
-                    ensure_shared_grads(local_model, model, gpu=gpu_id >= 0)
-                    #if batch_idx % args.log_interval == 0:
-                    #    print('{}\tTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                    #        pid, epoch, batch_idx * len(data), len(train_data_loader.dataset),
-                    #        100. * batch_idx / len(train_data_loader), loss.item()))
-                    optimizer.step()
-
-
-                    ## Split data into sub-batches of size batch_size
-                    #for i in range(0, len(data), args.batch_size):
-                    #    data_batch = data[i : i + args.batch_size]
-                    #    target_batch = target[i : i + args.batch_size]
-                    #    output = model(data_batch)
-                    #    loss = loss_fn(output, target_batch)
-                    #    train_loss.update(loss)
-                    #    # Average gradients among sub-batches
-                    #    loss.div_(math.ceil(float(len(data)) / args.batch_size))
-                    #    loss.backward()
-
-                    # Gradient is applied across all ranks
-                    optimizer.step()
-                    t.set_postfix({"loss": train_loss.avg.item()})
-                    t.update(1)
-
-
-    # Print final performance summar,.    # For hogwild, other ranks may still be working...
+    # Print final performance summary.
+    # For hogwild, other ranks may still be working...
     if args.verbose:
         if args.batched:
             num_iterations = len(train_loader)

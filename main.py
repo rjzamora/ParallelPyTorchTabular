@@ -61,15 +61,17 @@ if __name__ == '__main__':
         if args.hvd:
             args.hvd = False
             print("WARNING - Not using Horovod (Using Hogwild).")
-        if not args.batched:
+        if not args.batched args.hogwild > 0:
             args.batched = True
             print("WARNING - Switching to batched data loader.")
         if args.batches_per_allreduce > 1:
             args.batches_per_allreduce = 1
             print("WARNING - Using batches_per_allreduce = 1.")
-        if not args.adam:
+        if not args.adam and args.hogwild_gpus > 1:
             args.adam = True
-            print("WARNING - SharedAdam currently required for hogwild.")
+            print(
+                "WARNING - SharedAdam required for distributed hogwild."
+            )
     import torch
     from torch import nn
     import torch.optim as torch_optim

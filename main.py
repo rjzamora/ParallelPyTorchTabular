@@ -61,9 +61,12 @@ if __name__ == '__main__':
         if args.hvd:
             args.hvd = False
             print("WARNING - Not using Horovod (Using Hogwild).")
-        if not args.batched args.hogwild > 0:
+        if not args.batched and args.hogwild > 0:
             args.batched = True
-            print("WARNING - Switching to batched data loader.")
+            print(
+                "WARNING - Switching to batched data loader.\n"
+                "Hogwild cannot currently handle multi-worker dataloader."
+                )
         if args.batches_per_allreduce > 1:
             args.batches_per_allreduce = 1
             print("WARNING - Using batches_per_allreduce = 1.")

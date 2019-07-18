@@ -15,7 +15,17 @@ from batch_dataset_from_parquet import batch_dataset_from_parquet
 import batch_dataset, batch_dataloader
 
 from model import MortgageNetwork
-import horovod.torch as hvd
+
+
+try:
+    import horovod.torch as hvd
+except:
+    hvd = False
+
+try:
+    import byteps.torch as bps
+except:
+    bps = False
 
 
 def ensure_shared_grads(model, shared_model, cpu=False):
@@ -33,17 +43,23 @@ def ensure_shared_grads(model, shared_model, cpu=False):
             raise(RuntimeError)
 
 
-# Horovod: using `lr = base_lr * hvd.size()` from the very beginning leads to worse final
-# accuracy. Scale the learning rate `lr = base_lr` ---> `lr = base_lr * hvd.size()` during
+# Horovod: using `lr = base_lr * mysize` from the very beginning leads to worse final
+# accuracy. Scale the learning rate `lr = base_lr` ---> `lr = base_lr * mysize` during
 # the first five epochs. See https://arxiv.org/abs/1706.02677 for details.
 # After the warmup reduce learning rate by 10 on the 30th, 60th and 80th epochs.
 def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
+    if args.par == "hvd":
+        mysize = hvd.size()
+    elif args.par == "bps":
+        mysize = bps.size()
+    else:
+        mysize = 1
     if epoch < args.warmup_epochs:
         epoch += float(batch_idx + 1) / loader_size
         lr_adj = (
             1.0
-            / hvd.size()
-            * (epoch * (hvd.size() - 1) / args.warmup_epochs + 1)
+            / mysize
+            * (epoch * (mysize - 1) / args.warmup_epochs + 1)
         )
     elif epoch < 30:
         lr_adj = 1.0
@@ -55,28 +71,42 @@ def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
         lr_adj = 1e-3
     for param_group in optimizer.param_groups:
         param_group["lr"] = (
-            args.base_lr * hvd.size() * args.batches_per_allreduce * lr_adj
+            args.base_lr * mysize * args.batches_per_allreduce * lr_adj
         )
 
 
 # Average metrics from distributed (horovod) training.
 class Metric(object):
-    def __init__(self, name, use_hvd):
+    def __init__(self, name, par):
         self.name = name
+        self.bps_avg = torch.tensor(0.0)
         self.sum = torch.tensor(0.0)
         self.n = torch.tensor(0.0)
-        self.use_hvd = use_hvd
+        self.use_hvd = par and (par == "hvd")
+        self.use_bps = par and (par == "bps")
 
     def update(self, val):
-        if self.use_hvd:
-            self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
+        if self.use_bps:
+            avg_tensor = bps.push_pull(torch.tensor(val), name=self.name)
+            self.bps_avg = avg_tensor
         else:
-            self.sum += val.detach().cpu()
-        self.n += 1
+            if self.use_hvd:
+                self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
+            else:
+                self.sum += val.detach().cpu()
+            self.n += 1
 
     @property
     def avg(self):
+        if self.use_bps:
+            return self.bps_avg
         return self.sum / self.n
+
+
+def bps_metric_average(val, name):
+    tensor = torch.tensor(val)
+    avg_tensor = bps.push_pull(tensor, name=name)
+    return avg_tensor.item()
 
 
 # ========================================================================== #
@@ -95,11 +125,11 @@ def train_epoch(
     epoch,
     args,
 ):
-    if not args.hogwild:
+    if not args.par == "hog":
         model.train()
     if not args.batched:
         train_sampler.set_epoch(epoch)
-    train_loss = Metric("train_loss", args.hvd)
+    train_loss = Metric("train_loss", args.par)
     num_iterations = int(len(train_loader) // max(1, args.mysize))
     with tqdm(
         total=num_iterations,
@@ -109,10 +139,10 @@ def train_epoch(
         for batch_idx, (data, target) in enumerate(train_loader):
             if batch_idx == num_iterations:
                 break
-            if args.hvd and not args.adam:
+            if args.par in ["hvd", "bps"] and not args.adam:
                 adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
 
-            if args.hogwild:
+            if args.par == "hog":
                 if args.hogwild_gpus > 1:
                     local_model.zero_grad()
                     local_model.load_state_dict(model.state_dict())
@@ -156,7 +186,7 @@ def train(myrank, mysize, model, optimizer, args):
     # ====================================================================== #
 
     distributed_hw = False
-    if args.hogwild:
+    if args.par == "hog":
         if args.hogwild_gpus > 1:
             distributed_hw = True
             gpu_id = args.gpu_ids[myrank % len(args.gpu_ids)]
@@ -203,7 +233,7 @@ def train(myrank, mysize, model, optimizer, args):
     #  Define Loss/Optimization/LocalModel                                   #
     # ====================================================================== #
 
-    if args.hvd:
+    if args.par == "hvd":
         # Horovod: (optional) compression algorithm.
         compression = (
             hvd.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
@@ -220,6 +250,24 @@ def train(myrank, mysize, model, optimizer, args):
         # Horovod: broadcast parameters & optimizer state.
         hvd.broadcast_parameters(model.state_dict(), root_rank=0)
         hvd.broadcast_optimizer_state(optimizer, root_rank=0)
+
+    elif args.par == "bps":
+        # BytePS: (optional) compression algorithm.
+        compression = (
+            bps.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+        )
+
+        # BytePS: wrap optimizer with DistributedOptimizer.
+        optimizer = bps.DistributedOptimizer(
+            optimizer,
+            named_parameters=model.named_parameters(),
+            compression=compression,
+            backward_passes_per_step=args.batches_per_allreduce,
+        )
+
+        # BytePS: broadcast parameters & optimizer state.
+        bps.broadcast_parameters(model.state_dict(), root_rank=0)
+        bps.broadcast_optimizer_state(optimizer, root_rank=0)
 
     # Loss Function
     loss_fn = lambda pred, target: F.binary_cross_entropy_with_logits(pred, target)
@@ -261,7 +309,7 @@ def train(myrank, mysize, model, optimizer, args):
                     args,
                 )
     else:
-        # Horovod & Serial
+        # Horovod, BytePS & Serial
         for epoch in range(args.epochs):
             train_epoch(
                 model,

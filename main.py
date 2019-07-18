@@ -12,9 +12,11 @@ parser = argparse.ArgumentParser(description="Parallel Mortgage Workflow")
 parser.add_argument("--batch-size", type=int, default=80960, help="input batch size for training (default: 80960)")
 parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train (default: 1)")
 parser.add_argument("--batched", action="store_true", default=False, help="Use batched dataloader.")
-parser.add_argument("--hvd", action="store_true", default=False, help="Use horovod for data parallelism.")
-parser.add_argument("--hogwild", type=int, default=0, help="Use hogwild with this many processes.")
+
+parser.add_argument("--par", default=None, help="Data-parallelism framework to use (`hvd`, `bps`, `hog`).")
+parser.add_argument("--hogwild-procs", type=int, default=1, help="Use hogwild with this many processes.")
 parser.add_argument("--hogwild-gpus", type=int, default=1, help="Use distributed hogwild with this many gpus.")
+
 parser.add_argument("--cpu-params", action="store_true", default=False, help="Keep shared-model on CPU for hogwild.")
 parser.add_argument("--adam", action="store_true", default=False, help="Use adam optimizer instead of SGD.")
 parser.add_argument("--base-lr", "--lr", type=float, default=0.01, help="learning rate for a single GPU")
@@ -23,9 +25,9 @@ parser.add_argument("--momentum", type=float, default=0.9, help="SGD momentum")
 parser.add_argument("--wd", type=float, default=0.00005, help="weight decay")
 parser.add_argument("--no-cuda", action="store_true", default=False, help="disables CUDA training")
 parser.add_argument("--seed", type=int, default=42, help="random seed")
-parser.add_argument("--fp16-allreduce", action="store_true", default=False, help="use fp16 during hvd allreduce")
+parser.add_argument("--fp16-allreduce", action="store_true", default=False, help="use fp16 compression during allreduce ops")
 parser.add_argument("--batches-per-allreduce", type=int, default=1,
-    help="In hrovod, number of batches processed locally "
+    help="In hrovod or byteps, number of batches processed locally "
     "before executing allreduce across workers; it multiplies "
     "total batch size.",
 )
@@ -41,7 +43,7 @@ args.num_samples = 8096000
 args.log_interval = 100
 
 # Assume 8-GPUs if CUDA_VISIBLE_DEVICES not set
-cuda_visible = os.environ.get("cuda_visible", "0,1,2,3,4,5,6,7")
+cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
 if isinstance(cuda_visible, str):
     cuda_visible = cuda_visible.split(",")
 cuda_visible = list(map(int, cuda_visible))
@@ -53,38 +55,48 @@ args.gpu_ids = cuda_visible[:args.hogwild_gpus]
 # ========================================================================== #
 if __name__ == '__main__':
 
-    if args.hogwild > 0:
+    # Check if we need to import multiprocessing
+    if args.par and args.par == "hog":
         import torch.multiprocessing as mp
         mp.set_start_method('spawn')
-        # Hogwild gets preference over horovod, for now.
-        # Can try to combine methodologies in the future (or detect which is better)
-        if args.hvd:
-            args.hvd = False
-            print("WARNING - Not using Horovod (Using Hogwild).")
-        if not args.batched and args.hogwild > 0:
-            args.batched = True
-            print(
-                "WARNING - Switching to batched data loader.\n"
-                "Hogwild cannot currently handle multi-worker dataloader."
-                )
-        if args.batches_per_allreduce > 1:
-            args.batches_per_allreduce = 1
-            print("WARNING - Using batches_per_allreduce = 1.")
-        if not args.adam and args.hogwild_gpus > 1:
-            args.adam = True
-            print(
-                "WARNING - SharedAdam required for distributed hogwild."
-            )
+
     import torch
     from torch import nn
     import torch.optim as torch_optim
-    if args.hvd:
-        import horovod.torch as hvd
 
     from model import MortgageNetwork
     from training import train
     from shared_optimizer import SharedAdam
 
+    # Check if we are doing data parallelism
+    if args.par:
+        if args.par == "hvd":
+            # Using Horovod to synchronize gradients accross multiple workers
+            import horovod.torch as hvd
+
+        elif args.par == "bps":
+            # Using BytePS to synchronize gradients accross multiple workers
+            import byteps.torch as bps
+
+        elif args.par == "hog":
+            # Using Hogwild for asynchronous multiprocessing
+            if not args.batched:
+                args.batched = True
+                print(
+                    "WARNING - Switching to batched data loader.\n"
+                    "Hogwild cannot currently handle multi-worker dataloader."
+                    )
+            if args.batches_per_allreduce > 1:
+                args.batches_per_allreduce = 1
+                print("WARNING - Using batches_per_allreduce = 1.")
+            if not args.adam and args.hogwild_gpus > 1:
+                args.adam = True
+                print(
+                    "WARNING - SharedAdam required for distributed hogwild."
+                )
+        
+        else:
+            raise ValueError("--par input must be in [`hvd`, `bps`, `hog`]")
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     if not args.cuda:
@@ -93,15 +105,22 @@ if __name__ == '__main__':
     # Initialize Horovod/Cuda
     myrank = 0
     mysize = 1
-    if args.hvd:
+    if args.par == "hvd":
         hvd.init()
         myrank = hvd.rank()
         mysize = hvd.size()
+    elif args.par == "bps":
+        bps.init()
+        myrank = bps.rank()
+        mysize = bps.size()
     torch.manual_seed(args.seed)
     if args.cuda:
-        # Horovod: pin GPU to local rank.
-        if args.hvd:
+        # Horovod & BytePS: pin GPU to local rank.
+        if args.par == "hvd":
             torch.cuda.set_device(hvd.local_rank())
+            torch.cuda.manual_seed(args.seed)
+        if args.par == "bps":
+            torch.cuda.set_device(bps.local_rank())
             torch.cuda.manual_seed(args.seed)
 
     # Model definition
@@ -113,19 +132,19 @@ if __name__ == '__main__':
         use_cuda=args.cuda and not args.cpu_params,
     )
 
-    if args.hogwild > 0:
+    if args.par == "hog":
         model.share_memory() # gradients are allocated lazily, so they are not shared here
 
     # Using Adam optimizer?
     if args.adam:
-        if args.hogwild > 0 and args.hogwild_gpus > 1:
+        if args.par == "hog" and args.hogwild_gpus > 1:
             # Use distributed optimizer for distributed hogwild
             optimizer = SharedAdam(model.parameters(), lr=args.base_lr)
             optimizer.share_memory()
         else:
             optimizer = torch_optim.Adam(model.parameters(), lr=args.base_lr)
     else:
-        # Horovod: scale learning rate by the number of GPUs.
+        # Horovod and BytePS: Scale learning rate by the number of GPUs.
         # Gradient Accumulation: scale learning rate by batches_per_allreduce
         optimizer = torch_optim.SGD(
             model.parameters(),
@@ -136,10 +155,10 @@ if __name__ == '__main__':
 
     processes = []
     start_time = time.time()
-    if args.hogwild > 0:
-        for rank in range(args.hogwild):
+    if args.par == "hog":
+        for rank in range(args.hogwild_procs):
             myrank = rank
-            mysize = args.hogwild
+            mysize = args.hogwild_procs
             p = mp.Process(target=train, args=(myrank, mysize, model, optimizer, args))
             p.start()
             processes.append(p)

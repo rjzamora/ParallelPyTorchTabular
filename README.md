@@ -69,9 +69,11 @@ $ mpirun -n 4 python main.py --epochs 3 --par hvd --adam
 
 ### BytePS: Distributed Parameter-Server Learning (Multiple GPUs)
 
-Use `mpirun -n <number of desired processes>` and `--par bps` to perform BytePS-distributed learning:
+Use the `launch_bps.py` script and `--par bps` to perform BytePS-distributed learning:
 
 **E.g.**
 ```
 python launch_bps.py --par bps --adam --epochs 3
 ```
+
+Note that the number of workers will set according to the `CUDA_VISIBLE_DEVICES` environment variable.

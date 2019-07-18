@@ -29,18 +29,15 @@ except:
 
 
 def ensure_shared_grads(model, shared_model, cpu=False):
-    for param, shared_param in zip(
-        model.parameters(),
-        shared_model.parameters()
-    ):
+    for param, shared_param in zip(model.parameters(), shared_model.parameters()):
         try:
             if cpu:
                 shared_param._grad = param.grad.cpu()
             else:
                 shared_param._grad = param.grad
         except:
-            print('Failed to copy local to shared gradients.')
-            raise(RuntimeError)
+            print("Failed to copy local to shared gradients.")
+            raise (RuntimeError)
 
 
 # Horovod: using `lr = base_lr * mysize` from the very beginning leads to worse final
@@ -56,11 +53,7 @@ def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
         mysize = 1
     if epoch < args.warmup_epochs:
         epoch += float(batch_idx + 1) / loader_size
-        lr_adj = (
-            1.0
-            / mysize
-            * (epoch * (mysize - 1) / args.warmup_epochs + 1)
-        )
+        lr_adj = 1.0 / mysize * (epoch * (mysize - 1) / args.warmup_epochs + 1)
     elif epoch < 30:
         lr_adj = 1.0
     elif epoch < 60:
@@ -70,9 +63,7 @@ def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
     else:
         lr_adj = 1e-3
     for param_group in optimizer.param_groups:
-        param_group["lr"] = (
-            args.base_lr * mysize * args.batches_per_allreduce * lr_adj
-        )
+        param_group["lr"] = args.base_lr * mysize * args.batches_per_allreduce * lr_adj
 
 
 # Average metrics from distributed (horovod) training.
@@ -115,15 +106,9 @@ def bps_metric_average(val, name):
 #                                                                            #
 # ========================================================================== #
 
+
 def train_epoch(
-    model,
-    local_model,
-    loss_fn,
-    optimizer,
-    train_loader,
-    train_sampler,
-    epoch,
-    args,
+    model, local_model, loss_fn, optimizer, train_loader, train_sampler, epoch, args
 ):
     if not args.par == "hog":
         model.train()
@@ -140,7 +125,9 @@ def train_epoch(
             if batch_idx == num_iterations:
                 break
             if args.par in ["hvd", "bps"] and not args.adam:
-                adjust_learning_rate(epoch, batch_idx, optimizer, len(train_loader), args)
+                adjust_learning_rate(
+                    epoch, batch_idx, optimizer, len(train_loader), args
+                )
 
             if args.par == "hog":
                 if args.hogwild_gpus > 1:

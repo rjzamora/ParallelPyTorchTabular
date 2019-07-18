@@ -12,11 +12,9 @@ parser = argparse.ArgumentParser(description="Parallel Mortgage Workflow")
 parser.add_argument("--batch-size", type=int, default=80960, help="input batch size for training (default: 80960)")
 parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train (default: 1)")
 parser.add_argument("--batched", action="store_true", default=False, help="Use batched dataloader.")
-
 parser.add_argument("--par", default=None, help="Data-parallelism framework to use (`hvd`, `bps`, `hog`).")
 parser.add_argument("--hogwild-procs", type=int, default=1, help="Use hogwild with this many processes.")
 parser.add_argument("--hogwild-gpus", type=int, default=1, help="Use distributed hogwild with this many gpus.")
-
 parser.add_argument("--cpu-params", action="store_true", default=False, help="Keep shared-model on CPU for hogwild.")
 parser.add_argument("--adam", action="store_true", default=False, help="Use adam optimizer instead of SGD.")
 parser.add_argument("--base-lr", "--lr", type=float, default=0.01, help="learning rate for a single GPU")
@@ -36,7 +34,9 @@ parser.add_argument("--data-dir", default="/datasets/mortgage/post_etl/dnn/", he
 args = parser.parse_args()
 
 # Hard-coded options
-args.num_features = 2 ** 22 # When hashing features range will be [0, args.num_features)
+args.num_features = (
+    2 ** 22
+)  # When hashing features range will be [0, args.num_features)
 args.embedding_size = 64
 args.hidden_dims = [600, 600, 600, 600]
 args.num_samples = 8096000
@@ -47,18 +47,19 @@ cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
 if isinstance(cuda_visible, str):
     cuda_visible = cuda_visible.split(",")
 cuda_visible = list(map(int, cuda_visible))
-args.gpu_ids = cuda_visible[:args.hogwild_gpus]
+args.gpu_ids = cuda_visible[: args.hogwild_gpus]
 
 
 # ========================================================================== #
 #  Main "Method"                                                             #
 # ========================================================================== #
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     # Check if we need to import multiprocessing
     if args.par and args.par == "hog":
         import torch.multiprocessing as mp
-        mp.set_start_method('spawn')
+
+        mp.set_start_method("spawn")
 
     import torch
     from torch import nn
@@ -85,16 +86,14 @@ if __name__ == '__main__':
                 print(
                     "WARNING - Switching to batched data loader.\n"
                     "Hogwild cannot currently handle multi-worker dataloader."
-                    )
+                )
             if args.batches_per_allreduce > 1:
                 args.batches_per_allreduce = 1
                 print("WARNING - Using batches_per_allreduce = 1.")
             if not args.adam and args.hogwild_gpus > 1:
                 args.adam = True
-                print(
-                    "WARNING - SharedAdam required for distributed hogwild."
-                )
-        
+                print("WARNING - SharedAdam required for distributed hogwild.")
+
         else:
             raise ValueError("--par input must be in [`hvd`, `bps`, `hog`]")
 
@@ -133,7 +132,7 @@ if __name__ == '__main__':
     )
 
     if args.par == "hog":
-        model.share_memory() # gradients are allocated lazily, so they are not shared here
+        model.share_memory()  # gradients are allocated lazily, so they are not shared here
 
     # Using Adam optimizer?
     if args.adam:
@@ -168,5 +167,5 @@ if __name__ == '__main__':
         train(myrank, mysize, model, optimizer, args)
     end_time = time.time()
 
-    if myrank==0:
-        print("Total Training Time: "+str(end_time - start_time)+" seconds")
+    if myrank == 0:
+        print("Total Training Time: " + str(end_time - start_time) + " seconds")

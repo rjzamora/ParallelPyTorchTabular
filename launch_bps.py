@@ -10,6 +10,7 @@ import time
 """ This script can be used to launch a single-machine BytePS job
 """
 
+
 def worker(local_rank, local_size, command):
     my_env = os.environ.copy()
     my_env["BYTEPS_LOCAL_RANK"] = str(local_rank)
@@ -17,12 +18,9 @@ def worker(local_rank, local_size, command):
     if command.find("python") != 0:
         command = "python main.py " + command
     subprocess.check_call(
-        command,
-        env=my_env,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-        shell=True
+        command, env=my_env, stdout=sys.stdout, stderr=sys.stderr, shell=True
     )
+
 
 if __name__ == "__main__":
     print("BytePS launching worker")
@@ -32,7 +30,7 @@ if __name__ == "__main__":
     local_size = len(devices.split(","))
     t = [None] * local_size
     for i in range(local_size):
-        command = ' '.join(sys.argv[1:])
+        command = " ".join(sys.argv[1:])
         t[i] = threading.Thread(target=worker, args=[i, local_size, command])
         t[i].daemon = True
         t[i].start()

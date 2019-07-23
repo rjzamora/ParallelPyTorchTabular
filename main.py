@@ -39,8 +39,9 @@ args.num_features = (
 )  # When hashing features range will be [0, args.num_features)
 args.embedding_size = 64
 args.hidden_dims = [600, 600, 600, 600]
-args.num_samples = 8096000
-args.log_interval = 100
+args.num_samples = 8662720  # Used to limit data in conventional dataloader
+args.num_files = 1 # Used to limit data in batched dataloader
+args.log_interval = 1000
 
 # Assume 8-GPUs if CUDA_VISIBLE_DEVICES not set
 cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
@@ -168,4 +169,4 @@ if __name__ == "__main__":
     end_time = time.time()
 
     if myrank == 0:
-        print("Total Training Time: " + str(end_time - start_time) + " seconds")
+        print("\n\tTotal Training Time: " + str(end_time - start_time) + " seconds")

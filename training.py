@@ -1,5 +1,5 @@
 import os
-from tqdm import tqdm
+import sys
 import time
 import math
 from collections import defaultdict
@@ -66,40 +66,6 @@ def adjust_learning_rate(epoch, batch_idx, optimizer, loader_size, args):
         param_group["lr"] = args.base_lr * mysize * args.batches_per_allreduce * lr_adj
 
 
-# Average metrics from distributed (horovod) training.
-class Metric(object):
-    def __init__(self, name, par):
-        self.name = name
-        self.bps_avg = torch.tensor(0.0)
-        self.sum = torch.tensor(0.0)
-        self.n = torch.tensor(0.0)
-        self.use_hvd = par and (par == "hvd")
-        self.use_bps = par and (par == "bps")
-
-    def update(self, val):
-        if self.use_bps:
-            avg_tensor = bps.push_pull(torch.tensor(val), name=self.name)
-            self.bps_avg = avg_tensor
-        else:
-            if self.use_hvd:
-                self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
-            else:
-                self.sum += val.detach().cpu()
-            self.n += 1
-
-    @property
-    def avg(self):
-        if self.use_bps:
-            return self.bps_avg
-        return self.sum / self.n
-
-
-def bps_metric_average(val, name):
-    tensor = torch.tensor(val)
-    avg_tensor = bps.push_pull(tensor, name=name)
-    return avg_tensor.item()
-
-
 # ========================================================================== #
 #                                                                            #
 #  Training Function Definition                                              #
@@ -114,56 +80,51 @@ def train_epoch(
         model.train()
     if not args.batched:
         train_sampler.set_epoch(epoch)
-    train_loss = Metric("train_loss", args.par)
     num_iterations = int(len(train_loader) // max(1, args.mysize))
-    with tqdm(
-        total=num_iterations,
-        desc="Train Epoch     #{}".format(epoch + 1),
-        disable=not args.verbose,
-    ) as t:
-        for batch_idx, (data, target) in enumerate(train_loader):
-            if batch_idx == num_iterations:
-                break
-            if args.par in ["hvd", "bps"] and not args.adam:
-                adjust_learning_rate(
-                    epoch, batch_idx, optimizer, len(train_loader), args
-                )
+    for batch_idx, (data, target) in enumerate(train_loader):
+        if batch_idx == num_iterations:
+            break
+        if args.par in ["hvd", "bps"] and not args.adam:
+            adjust_learning_rate(
+                epoch, batch_idx, optimizer, len(train_loader), args
+            )
 
-            if args.par == "hog":
-                if args.hogwild_gpus > 1:
-                    local_model.zero_grad()
-                    local_model.load_state_dict(model.state_dict())
-                    output = local_model(data.cuda())
-                    loss = loss_fn(output, target.cuda())
-                    train_loss.update(loss)
-                    loss.backward()
-                    ensure_shared_grads(local_model, model, cpu=args.cpu_params)
-                else:
-                    optimizer.zero_grad()
-                    output = model(data.cuda())
-                    loss = loss_fn(output, target.cuda())
-                    train_loss.update(loss)
-                    loss.backward()
+        if args.par == "hog":
+            if args.hogwild_gpus > 1:
+                local_model.zero_grad()
+                local_model.load_state_dict(model.state_dict())
+                output = local_model(data.cuda())
+                loss = loss_fn(output, target.cuda())
+                loss.backward()
+                ensure_shared_grads(local_model, model, cpu=args.cpu_params)
             else:
-                if args.cuda:
-                    data = data.cuda()
-                    target = target.cuda()
                 optimizer.zero_grad()
-                # Split data into sub-batches of size batch_size
-                for i in range(0, len(data), args.batch_size):
-                    data_batch = data[i : i + args.batch_size]
-                    target_batch = target[i : i + args.batch_size]
-                    output = model(data_batch)
-                    loss = loss_fn(output, target_batch)
-                    train_loss.update(loss)
-                    # Average gradients among sub-batches
-                    loss.div_(math.ceil(float(len(data)) / args.batch_size))
-                    loss.backward()
+                output = model(data.cuda())
+                loss = loss_fn(output, target.cuda())
+                loss.backward()
+        else:
+            if args.cuda:
+                data = data.cuda()
+                target = target.cuda()
+            optimizer.zero_grad()
+            # Split data into sub-batches of size batch_size
+            for i in range(0, len(data), args.batch_size):
+                data_batch = data[i : i + args.batch_size]
+                target_batch = target[i : i + args.batch_size]
+                output = model(data_batch)
+                loss = loss_fn(output, target_batch)
+                # Average gradients among sub-batches
+                loss.div_(math.ceil(float(len(data)) / args.batch_size))
+                loss.backward()
 
-            # Gradient is applied across all ranks
-            optimizer.step()
-            t.set_postfix({"loss": train_loss.avg.item()})
-            t.update(1)
+        # Gradient is applied across all ranks
+        optimizer.step()
+
+        if args.verbose and (batch_idx % args.log_interval == 0 or batch_idx == num_iterations - 1):
+            print('\tTrain Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, (batch_idx+1), num_iterations,
+                100. * (batch_idx+1) / num_iterations, loss.item()))
+            sys.stdout.flush()
 
 
 def train(myrank, mysize, model, optimizer, args):
@@ -191,7 +152,7 @@ def train(myrank, mysize, model, optimizer, args):
     if args.batched:
         train_dataset = batch_dataset_from_parquet(
             os.path.join(out_dir, "train"),
-            num_files=1,
+            num_files=args.num_files,
             batch_size=allreduce_batch_size,
             use_cuDF=False,
             use_GPU_RAM=False,
@@ -320,7 +281,7 @@ def train(myrank, mysize, model, optimizer, args):
         total_examples = args.epochs * ex_per_epoch
         total_time = time.time() - start_time
         print(
-            "\n{} Epochs in {} seconds ({} examples per epoch) -> [{} examples/s]".format(
+            "\n\t{} Epochs in {} seconds ({} examples per epoch) -> [{} examples/s]".format(
                 args.epochs, total_time, ex_per_epoch, total_examples / total_time
             )
         )

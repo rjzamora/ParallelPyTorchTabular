@@ -84,7 +84,7 @@ def parquet_to_tensor(
 
 def batch_dataset_from_parquet(
     root_path,
-    num_files=1,
+    num_files=None,
     file_offset=0,
     use_cuDF=False,
     use_GPU_RAM=False,

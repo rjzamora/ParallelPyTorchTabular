@@ -17,7 +17,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
 common = [
     "python",
     "main.py",
-    "--batch_size",
+    "--batch-size",
     "512",
     "--batched",
     "--lr",
@@ -31,10 +31,10 @@ common = [
 ]
 
 commands = [
-    common+["--hogwild-nprocs", "1"],
-    common+["--hogwild-nprocs", "2"],
-    common+["--hogwild-nprocs", "3"],
-    common+["--hogwild-nprocs", "4"],
+    common+["--hogwild-procs", "1"],
+    common+["--hogwild-procs", "2"],
+    common+["--hogwild-procs", "3"],
+    common+["--hogwild-procs", "4"],
 ]
 
 if __name__ == "__main__":

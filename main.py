@@ -1,6 +1,10 @@
 import argparse
 import time
+import sys
 import os
+
+import warnings
+warnings.filterwarnings('ignore')
 
 # ========================================================================== #
 #                                                                            #
@@ -15,7 +19,7 @@ parser.add_argument("--batched", action="store_true", default=False, help="Use b
 parser.add_argument("--par", default=None, help="Data-parallelism framework to use (`hvd`, `bps`, `hog`).")
 parser.add_argument("--hogwild-procs", type=int, default=1, help="Use hogwild with this many processes.")
 parser.add_argument("--hogwild-gpus", type=int, default=1, help="Use distributed hogwild with this many gpus.")
-parser.add_argument("--cpu-params", action="store_true", default=False, help="Keep shared-model on CPU for hogwild.")
+parser.add_argument("--gpu-params", action="store_true", default=False, help="Keep shared-model on GPU for hogwild.")
 parser.add_argument("--adam", action="store_true", default=False, help="Use adam optimizer instead of SGD.")
 parser.add_argument("--base-lr", "--lr", type=float, default=0.01, help="learning rate for a single GPU")
 parser.add_argument("--warmup-epochs", type=float, default=5, help="number of warmup epochs")
@@ -48,7 +52,8 @@ cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
 if isinstance(cuda_visible, str):
     cuda_visible = cuda_visible.split(",")
 cuda_visible = list(map(int, cuda_visible))
-args.gpu_ids = cuda_visible[: args.hogwild_gpus]
+args.hogwild_gpus = min(args.hogwild_gpus, len(cuda_visible))
+args.gpu_ids = [i for i in range(args.hogwild_gpus)]
 
 
 # ========================================================================== #
@@ -101,6 +106,22 @@ if __name__ == "__main__":
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     if not args.cuda:
         args.gpu_ids = [-1]
+    elif args.par == "hog":
+        if not args.gpu_params and args.hogwild_gpus <= 1:
+            args.gpu_params = True
+            # Note: Single-GPU hogwild needs to keep the model on the GPU (for now)
+
+    # Set model device
+    if args.par == "hog":
+        if args.cuda and args.gpu_params:
+            args.model_device = torch.device(type='cuda', index=args.gpu_ids[0])
+        else:
+            args.model_device = torch.device('cpu')
+    else:
+        if args.cuda:
+            args.model_device = torch.device('cuda')
+        else:
+            args.model_device = torch.device('cpu')
 
     # Initialize Horovod/Cuda
     myrank = 0
@@ -129,11 +150,8 @@ if __name__ == "__main__":
         args.embedding_size,
         args.hidden_dims,
         activation=nn.ReLU(),
-        use_cuda=args.cuda and not args.cpu_params,
+        device=args.model_device,
     )
-
-    if args.par == "hog":
-        model.share_memory()  # gradients are allocated lazily, so they are not shared here
 
     # Using Adam optimizer?
     if args.adam:
@@ -169,4 +187,5 @@ if __name__ == "__main__":
     end_time = time.time()
 
     if myrank == 0:
-        print("\n\tTotal Training Time: " + str(end_time - start_time) + " seconds")
+        print("\n\tTotal Training Time: " + str(end_time - start_time) + " seconds\n")
+    sys.exit(0)

@@ -10,6 +10,7 @@ import time
 """ This script can be used to launch a single-machine BytePS job
 """
 
+timeout = 60 * 10 # Timeout == 10 mins.
 
 def worker(local_rank, local_size, command):
     my_env = os.environ.copy()
@@ -26,6 +27,11 @@ if __name__ == "__main__":
     print("BytePS launching worker")
     sys.stdout.flush()
 
+    os.environ["DMLC_WORKER_ID"]="0" # your worker id
+    os.environ["DMLC_NUM_WORKER"]="1" # you only have one worker
+    os.environ["DMLC_ROLE"]="worker" # your role is worker
+    os.environ["DMLC_ENABLE_RDMA"]="1" # Enable RDMA
+
     devices = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1,2,3,4,5,6,7")
     local_size = len(devices.split(","))
     t = [None] * local_size
@@ -36,4 +42,4 @@ if __name__ == "__main__":
         t[i].start()
 
     for i in range(local_size):
-        t[i].join()
+        t[i].join(timeout=timeout)

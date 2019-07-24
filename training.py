@@ -28,13 +28,10 @@ except:
     bps = False
 
 
-def ensure_shared_grads(model, shared_model, cpu=False):
+def ensure_shared_grads(model, shared_model, model_device):
     for param, shared_param in zip(model.parameters(), shared_model.parameters()):
         try:
-            if cpu:
-                shared_param._grad = param.grad.cpu()
-            else:
-                shared_param._grad = param.grad
+            shared_param._grad = param.grad.to(device=model_device)
         except:
             print("Failed to copy local to shared gradients.")
             raise (RuntimeError)
@@ -96,11 +93,14 @@ def train_epoch(
                 output = local_model(data.cuda())
                 loss = loss_fn(output, target.cuda())
                 loss.backward()
-                ensure_shared_grads(local_model, model, cpu=args.cpu_params)
+                ensure_shared_grads(local_model, model, args.model_device)
             else:
+                if args.cuda:
+                    data = data.cuda()
+                    target = target.cuda()
                 optimizer.zero_grad()
-                output = model(data.cuda())
-                loss = loss_fn(output, target.cuda())
+                output = model(data)
+                loss = loss_fn(output, target)
                 loss.backward()
         else:
             if args.cuda:
@@ -202,7 +202,7 @@ def train(myrank, mysize, model, optimizer, args):
     elif args.par == "bps":
         # BytePS: (optional) compression algorithm.
         compression = (
-            bps.Compression.fp16 if args.fp16_allreduce else hvd.Compression.none
+            bps.Compression.fp16 if args.fp16_allreduce else bps.Compression.none
         )
 
         # BytePS: wrap optimizer with DistributedOptimizer.
@@ -228,7 +228,7 @@ def train(myrank, mysize, model, optimizer, args):
             args.embedding_size,
             args.hidden_dims,
             activation=nn.ReLU(),
-            use_cuda=args.cuda,
+            device=torch.device('cpu'),
         )
 
     # ====================================================================== #
@@ -281,7 +281,12 @@ def train(myrank, mysize, model, optimizer, args):
         total_examples = args.epochs * ex_per_epoch
         total_time = time.time() - start_time
         print(
-            "\n\t{} Epochs in {} seconds ({} examples per epoch) -> [{} examples/s]".format(
-                args.epochs, total_time, ex_per_epoch, total_examples / total_time
+            "\n\t{} Epochs in {} seconds ({} examples per epoch)".format(
+                args.epochs, total_time, ex_per_epoch
             )
+        )
+        print(
+            "\tTraining Rate [examples/s]: {}".format(
+                total_examples / total_time
+                )
         )

@@ -11,30 +11,83 @@ import datetime
 """
 
 output_dir = "/home/nfs/rzamora/workspace/rapids-dl/ParallelPyTorchTabular/results/"
-batch_sizes = [1000, 8000, 64000, 128000]
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,7"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2,3,4,5"
 
 common = [
-    "python",
-    "main.py",
     "--batch-size",
-    "512",
+    "100000",
     "--batched",
     "--lr",
     "0.01",
-    "--par",
-    "hog",
-    "--hogwild-gpus",
-    "1",
     "--adam",
-    "--epochs", "1"
+    "--epochs",
+    "10"
+]
+
+common_sgd = [
+    "--batched",
+    "--epochs",
+    "10"
 ]
 
 commands = [
-    common+["--hogwild-procs", "1"],
-    common+["--hogwild-procs", "2"],
-    common+["--hogwild-procs", "3"],
-    common+["--hogwild-procs", "4"],
+    # Default Serial with Adam
+    ("1,2,3,4,5,7", ["python","main.py"]+common+[], 1),
+
+    # Grid search over batch-size and lr for basic SGD
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","100000","--momentum","0","--wd","0"], 1),
+
+    # Test if momentum and wd are likely to help
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0","--wd","0.00005"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0","--wd","0.00005"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0","--wd","0.00005"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0.9","--wd","0.00005"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0.9","--wd","0.00005"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0.9","--wd","0.00005"], 1),
+
+    # Horovod scaling with Adam (TTS not likely to scale with Adam?)
+    ("1,2,3,4,5,7", ["mpirun", "-n", "1","python","main.py"]+common+["--par","hvd"], 1),
+    ("1,2,3,4,5,7", ["mpirun", "-n", "2","python","main.py"]+common+["--par","hvd"], 1),
+    ("1,2,3,4,5,7", ["mpirun", "-n", "3","python","main.py"]+common+["--par","hvd"], 1),
+    ("1,2,3,4,5,7", ["mpirun", "-n", "4","python","main.py"]+common+["--par","hvd"], 1),
+    ("1,2,3,4,5,7", ["mpirun", "-n", "5","python","main.py"]+common+["--par","hvd"], 1),
+    ("1,2,3,4,5,7", ["mpirun", "-n", "6","python","main.py"]+common+["--par","hvd"], 1),
+
+    # Distributed Hogwild scaling with Adam (TTS not likely to scale with Adam?)
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","1","--hogwild-gpus","1","--gpu-params"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","2","--hogwild-gpus","2","--gpu-params"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","3","--hogwild-gpus","3","--gpu-params"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","4","--hogwild-gpus","4","--gpu-params"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","5","--hogwild-gpus","5","--gpu-params"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common+["--par","hog","--hogwild-procs","6","--hogwild-gpus","6","--gpu-params"], 1),
+
+    # BytePS scaling with Adam (TTS not likely to scale with Adam?)
+    ("1", ["python","launch_bps.py"]+common+["--par","bps"], 1),
+    ("1,2", ["python","launch_bps.py"]+common+["--par","bps"], 1),
+    ("1,2,3", ["python","launch_bps.py"]+common+["--par","bps"], 1),
+    ("1,2,3,4", ["python","launch_bps.py"]+common+["--par","bps"], 1),
+    ("1,2,3,4,5", ["python","launch_bps.py"]+common+["--par","bps"], 1),
+    ("1,2,3,4,5,7", ["python","launch_bps.py"]+common+["--par","bps"], 1),
 ]
 
 if __name__ == "__main__":
@@ -54,14 +107,19 @@ if __name__ == "__main__":
             print("Current date and time: ", dt,"\n")
             sys.stdout.flush()
 
-            for run_cmd in commands:
+            for (cvd, run_cmd, ntrials) in commands:
 
                 print("\nExperiment Number ", exp_cnt + 1, "\n")
                 print("\tcommand:", *run_cmd)
                 print("\n")
                 sys.stdout.flush()
 
-                sp.call(run_cmd, stdout=outf, stderr=outf)
+                for trial in range(ntrials):
+                    os.environ["CUDA_VISIBLE_DEVICES"] = cvd
+                    print("\tTrial ", trial+1, "...\n")
+                    print("\tCUDA_VISIBLE_DEVICES:", os.environ["CUDA_VISIBLE_DEVICES"])
+                    sys.stdout.flush()
+
+                    sp.call(run_cmd, stdout=outf, stderr=outf)
+
                 exp_cnt += 1
-
-

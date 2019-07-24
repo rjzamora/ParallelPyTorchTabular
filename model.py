@@ -19,7 +19,7 @@ class MortgageNetwork(nn.Module):
         num_features,
         embedding_size,
         hidden_dims,
-        use_cuda=True,
+        device='cpu',
         activation=nn.ReLU(),
         dropout=None,
         embedding_bag_mode="mean",
@@ -27,10 +27,7 @@ class MortgageNetwork(nn.Module):
         super(MortgageNetwork, self).__init__()
         self.input_size = num_features
         self.embedding_size = embedding_size
-        if use_cuda and torch.cuda.is_available():
-            self.device = torch.device("cuda")
-        else:
-            self.device = torch.device("cpu")
+        self.device = device
         self.activation = activation
         self.dropout = dropout
 

@@ -24,6 +24,13 @@ common = [
     "10"
 ]
 
+common_adam = [
+    "--adam",
+    "--batched",
+    "--epochs",
+    "10"
+]
+
 common_sgd = [
     "--batched",
     "--epochs",
@@ -31,39 +38,49 @@ common_sgd = [
 ]
 
 commands = [
-    # Default Serial with Adam
-    ("1,2,3,4,5,7", ["python","main.py"]+common+[], 1),
+    # Grid search over batch-size and lr for Adam
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.008","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.008","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.008","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.010","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.010","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.010","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.012","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.012","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.012","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.015","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.015","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.015","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.020","--batch-size","1000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.020","--batch-size","10000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_adam+["--lr","0.020","--batch-size","100000","--momentum","0","--wd","0"], 1),
 
     # Grid search over batch-size and lr for basic SGD
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.005","--batch-size","100000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.008","--batch-size","100000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.012","--batch-size","100000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","100000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","1000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","10000","--momentum","0","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.002","--batch-size","100000","--momentum","0","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.015","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.025","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.025","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.025","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.030","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.030","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.030","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.035","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.035","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.035","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.040","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.040","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.040","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
 
-    # Test if momentum and wd are likely to help
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0.9","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0.9","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0.9","--wd","0"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0","--wd","0.00005"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0","--wd","0.00005"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0","--wd","0.00005"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","1000","--momentum","0.9","--wd","0.00005"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","10000","--momentum","0.9","--wd","0.00005"], 1),
-    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.010","--batch-size","100000","--momentum","0.9","--wd","0.00005"], 1),
+    # Test sensitivity to momentum
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.88","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.89","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.90","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.91","--wd","0"], 1),
+    ("1,2,3,4,5,7", ["python","main.py"]+common_sgd+["--lr","0.020","--batch-size","10000","--momentum","0.92","--wd","0"], 1),
 
     # Horovod scaling with Adam (TTS not likely to scale with Adam?)
     ("1,2,3,4,5,7", ["mpirun", "-n", "1","python","main.py"]+common+["--par","hvd"], 1),
@@ -86,8 +103,6 @@ commands = [
     ("1,2", ["python","launch_bps.py"]+common+["--par","bps"], 1),
     ("1,2,3", ["python","launch_bps.py"]+common+["--par","bps"], 1),
     ("1,2,3,4", ["python","launch_bps.py"]+common+["--par","bps"], 1),
-    ("1,2,3,4,5", ["python","launch_bps.py"]+common+["--par","bps"], 1),
-    ("1,2,3,4,5,7", ["python","launch_bps.py"]+common+["--par","bps"], 1),
 ]
 
 if __name__ == "__main__":

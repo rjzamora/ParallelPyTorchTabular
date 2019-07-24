@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 
 parser = argparse.ArgumentParser(description="Parallel Mortgage Workflow")
 parser.add_argument("--batch-size", type=int, default=80960, help="input batch size for training (default: 80960)")
-parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train (default: 1)")
+parser.add_argument("--epochs", type=int, default=10, help="number of epochs to train (default: 10)")
 parser.add_argument("--batched", action="store_true", default=False, help="Use batched dataloader.")
 parser.add_argument("--par", default=None, help="Data-parallelism framework to use (`hvd`, `bps`, `hog`).")
 parser.add_argument("--hogwild-procs", type=int, default=1, help="Use hogwild with this many processes.")

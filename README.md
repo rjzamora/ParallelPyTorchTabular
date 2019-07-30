@@ -4,14 +4,14 @@ Exploring parallel deep learning for tabular data.
 
 ## Options
 
-Type `python main.py --help` for options:
+Type `python src/main.py --help` for options:
 
 ```
 optional arguments:
   -h, --help            show this help message and exit
   --batch-size BATCH_SIZE
                         input batch size for training (default: 80960)
-  --epochs EPOCHS       number of epochs to train (default: 1)
+  --epochs EPOCHS       number of epochs to train (default: 10)
   --batched             Use batched dataloader.
   --par PAR             Data-parallelism framework to use (`hvd`, `bps`,
                         `hog`).
@@ -19,7 +19,7 @@ optional arguments:
                         Use hogwild with this many processes.
   --hogwild-gpus HOGWILD_GPUS
                         Use distributed hogwild with this many gpus.
-  --cpu-params          Keep shared-model on CPU for hogwild.
+  --gpu-params          Keep shared-model on GPU for hogwild.
   --adam                Use adam optimizer instead of SGD.
   --base-lr BASE_LR, --lr BASE_LR
                         learning rate for a single GPU
@@ -46,7 +46,7 @@ Use `--par hog --hogwild-procs <number of desired processes>`:
 
 **E.g.**
 ```
-$ python main.py --epochs 3 --par hog --hogwild-procs 4 --adam
+$ python src/main.py --epochs 3 --par hog --hogwild-procs 4 --adam --gpu-params --batched
 ```
 
 ### Hogwild: Multiprocessed-Asynchronous Learning (Multiple GPUs)
@@ -55,7 +55,7 @@ Use `--par hog --hogwild-procs <number of desired processes>` and `--hogwild-gpu
 
 **E.g.**
 ```
-$ python main.py --epochs 3 --par hog --hogwild-procs 4 --hogwild-gpus 4 --adam
+$ python src/main.py --epochs 3 --par hog --hogwild-procs 4 --hogwild-gpus 4 --adam --gpu-params --batched
 ```
 
 ### Horovod: Distributed Synchronous Learning (Multiple GPUs)
@@ -64,7 +64,7 @@ Use `mpirun -n <number of desired processes>` and `--par hvd` to perform Horovod
 
 **E.g.**
 ```
-$ mpirun -n 4 python main.py --epochs 3 --par hvd --adam
+$ mpirun -n 4 python src/main.py --epochs 3 --par hvd --adam --batched
 ```
 
 ### BytePS: Distributed Parameter-Server Learning (Multiple GPUs)
@@ -73,7 +73,7 @@ Use the `launch_bps.py` script and `--par bps` to perform BytePS-distributed lea
 
 **E.g.**
 ```
-python launch_bps.py --par bps --adam --epochs 3
+python src/launch_bps.py --par bps --adam --epochs 3 --batched
 ```
 
 Note that the number of workers will set according to the `CUDA_VISIBLE_DEVICES` environment variable.
